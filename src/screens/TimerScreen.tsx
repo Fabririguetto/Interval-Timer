@@ -31,16 +31,67 @@ export function TimerScreen({ navigation, route }: Props) {
   const { onPhaseChange, onTick } = useWorkoutAudio();
   const { snapshot, start, pause, resume, skip, stop } = useTimer({ onPhaseChange, onTick });
 
+  const totalDuration = useMemo(
+    () => phases.reduce((s, p) => s + p.duration, 0),
+    [phases],
+  );
+
+  const phaseIndex = useMemo(
+    () => snapshot.phase ? phases.findIndex(p => p.id === snapshot.phase!.id) : -1,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [snapshot.phase?.id, phases],
+  );
+
+  const phaseStartProgress = useMemo(() => {
+    if (totalDuration === 0 || phaseIndex < 0) return 0;
+    return phases.slice(0, phaseIndex).reduce((s, p) => s + p.duration, 0) / totalDuration;
+  }, [phaseIndex, phases, totalDuration]);
+
   const animWorkoutProgress = useRef(new Animated.Value(0)).current;
+  const animProgressRef = useRef<Animated.CompositeAnimation | null>(null);
+
+  // New phase → snap to phase-start, animate to phase-end over full phase duration
   useEffect(() => {
-    Animated.timing(animWorkoutProgress, {
-      toValue: snapshot.workoutProgress,
-      duration: 950,
+    if (!snapshot.phase || totalDuration === 0) return;
+    animProgressRef.current?.stop();
+    const endProgress = phaseStartProgress + snapshot.phase.duration / totalDuration;
+    animWorkoutProgress.setValue(phaseStartProgress);
+    animProgressRef.current = Animated.timing(animWorkoutProgress, {
+      toValue: Math.min(endProgress, 1),
+      duration: snapshot.phase.duration * 1000,
       easing: Easing.linear,
       useNativeDriver: false,
-    }).start();
+    });
+    animProgressRef.current.start();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [snapshot.workoutProgress]);
+  }, [snapshot.phase?.id]);
+
+  // Pause / resume / done
+  useEffect(() => {
+    if (snapshot.status === 'paused') {
+      animProgressRef.current?.stop();
+    } else if (snapshot.status === 'running' && snapshot.phase && totalDuration > 0) {
+      animProgressRef.current?.stop();
+      const endProgress = phaseStartProgress + snapshot.phase.duration / totalDuration;
+      animProgressRef.current = Animated.timing(animWorkoutProgress, {
+        toValue: Math.min(endProgress, 1),
+        duration: snapshot.secondsLeft * 1000,
+        easing: Easing.linear,
+        useNativeDriver: false,
+      });
+      animProgressRef.current.start();
+    } else if (snapshot.status === 'done') {
+      animProgressRef.current?.stop();
+      animProgressRef.current = Animated.timing(animWorkoutProgress, {
+        toValue: 1,
+        duration: 300,
+        easing: Easing.linear,
+        useNativeDriver: false,
+      });
+      animProgressRef.current.start();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [snapshot.status]);
 
   // Start once phases are loadedtoda
   useEffect(() => {
@@ -151,7 +202,7 @@ export function TimerScreen({ navigation, route }: Props) {
         )}
 
         {/* Overall progress bar */}
-        {!isIdle && !isDone && (
+        {!isIdle && (
           <View style={styles.progressBarWrap}>
             <View style={[styles.progressBarBg, { backgroundColor: colors.accent + '22' }]}>
               <Animated.View
